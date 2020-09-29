@@ -248,7 +248,97 @@ public class AdventureMMO {
 		this.game.getScheduler().getScheduledTasks(this).forEach(task -> task.cancel());
 		this.game.getCommandManager().getOwnedBy(this).forEach(this.game.getCommandManager()::removeMapping);
 
-		this.onInit(null);
+		this.logger.info("Loading plugin...");
+
+		// Loading Config
+		final Config config = new Config(this, this.configdir.resolve("config.conf"));
+
+		// Registering Config Settings
+		Abilities.VALUES.removeIf(ability -> !config.getNode("abilities", ability.getId(), "enabled").getBoolean(true));
+		Abilities.VALUES.forEach(ability -> ability.setValues(config.getNode("abilities", ability.getId())));
+		SkillTypes.VALUES.removeIf(skill -> !config.getNode("skills", skill.getId(), "enabled").getBoolean(true));
+		SkillTypes.VALUES.forEach(skill -> skill.getAbilities().removeIf(ability -> !ability.isEnabled()));
+
+		// Initializing Managers
+		this.playerdata = new HoconPlayerDatabase(this, this.configdir.resolve("playerdata"));
+		this.tops = new HoconTopDatabase(this, this.configdir.resolve("tops.conf"));
+		this.itemdata = new HoconItemDatabase(this, this.configdir.resolve("itemdata.conf"));
+		this.menus = new MenuManager(this);
+		this.messages = new MessageManager(this, config.getNode("messages"));
+		this.doubledrops = new DoubleDropManager(this);
+		this.choices = new ChoiceMaps();
+
+		// Registering Commands
+		this.game.getCommandManager().register(this,
+				CommandSpec.builder().description(Text.of(TextColors.BLUE, "AdventureMMO | Skills Command"))
+						.arguments(GenericArguments
+								.optionalWeak(GenericArguments.choices(Text.of("skill"), this.choices.getSkills())))
+						.executor(new CommandSkills(this)).build(),
+				config.getNode("commands", "skills").getList(obj -> (String) obj));
+
+		this.game.getCommandManager().register(this,
+				CommandSpec.builder().description(Text.of(TextColors.BLUE, "AdventureMMO | Top Command"))
+						.arguments(GenericArguments
+								.optionalWeak(GenericArguments.choices(Text.of("skill"), this.choices.getSkills())))
+						.executor(new CommandTop(this)).build(),
+				config.getNode("commands", "tops").getList(obj -> (String) obj));
+
+		this.game.getCommandManager().register(this,
+				CommandSpec.builder().description(Text.of(TextColors.BLUE, "AdventureMMO | Settings Command"))
+						.executor(new CommandSettings(this)).build(),
+				config.getNode("commands", "settings").getList(obj -> (String) obj));
+
+		SkillTypes.VALUES.stream().filter(skill -> config.getNode("commands", skill.getId()).getBoolean(true))
+				.forEach(skill -> {
+					this.game.getCommandManager().register(this, CommandSpec.builder()
+							.description(Text.of(TextColors.BLUE, "AdventureMMO | ", skill.getName(), " Command"))
+							.executor(new CommandSkill(this, skill)).build(), skill.getId());
+				});
+
+		// Admin Commands
+		this.game.getCommandManager().register(this, CommandSpec.builder()
+				.child(CommandSpec.builder().description(Text.of(TextColors.BLUE, "AdventureMMO | Reload Command"))
+						.permission("mmo.admin.reload").executor(new CommandReload(this)).build(), "reload")
+				.child(CommandSpec.builder().description(Text.of(TextColors.BLUE, "AdventureMMO | View Command"))
+						.permission("mmo.admin.view").arguments(GenericArguments.user(Text.of("user")))
+						.executor(new CommandView(this)).build(), "view")
+				.child(CommandSpec.builder().description(Text.of(TextColors.BLUE, "AdventureMMO | Set Command"))
+						.permission("mmo.admin.set")
+						.arguments(GenericArguments.user(Text.of("user")),
+								GenericArguments.choices(Text.of("skill"), this.choices.getSkills()),
+								GenericArguments.integer(Text.of("level")),
+								GenericArguments.optionalWeak(GenericArguments.integer(Text.of("exp"))))
+						.executor(new CommandSet(this)).build(), "set")
+				.child(CommandSpec.builder().description(Text.of(TextColors.BLUE, "AdventureMMO | SetItem Command"))
+						.permission("mmo.admin.setitem")
+						.arguments(GenericArguments.choices(Text.of("tooltype"), this.choices.getTools()))
+						.executor(new CommandItemSet(this)).build(), "setitem")
+				.child(CommandSpec.builder().description(Text.of(TextColors.BLUE, "AdventureMMO | SetBlock Command"))
+						.permission("mmo.admin.setblock")
+						.arguments(GenericArguments.choices(Text.of("skill"), this.choices.getSkills()),
+								GenericArguments.integer(Text.of("exp")))
+						.executor(new CommandBlockSet(this)).build(), "setblock")
+				.child(CommandSpec.builder().description(Text.of(TextColors.BLUE, "AdventureMMO | ClearItem Command"))
+						.permission("mmo.admin.clearitem").executor(new CommandItemClear(this)).build(), "clearitem")
+				.child(CommandSpec.builder().description(Text.of(TextColors.BLUE, "AdventureMMO | ClearBlock Command"))
+						.permission("mmo.admin.clearblock").executor(new CommandBlockClear(this)).build(), "clearblock")
+				.build(), "mmoadmin");
+
+		// Registering Listeners
+		SkillTypes.VALUES.forEach(
+				skill -> this.game.getEventManager().registerListeners(this, skill.getListener().apply(this, config)));
+		this.game.getEventManager().registerListeners(this, new ClientListener(this));
+		this.game.getEventManager().registerListeners(this, new AbilitiesListener(this, config));
+		this.game.getEventManager().registerListeners(this, new WorldListener(this));
+		this.game.getEventManager().registerListeners(this, this.doubledrops);
+		if (config.getNode("economy", "enabled").getBoolean()) {
+			try {
+				this.game.getEventManager().registerListeners(this, new EconomyListener(this, config));
+			} catch (final ServiceException exc) {
+				this.logger.error("No Economy Service was found! Install one or disable economy in the config file: {}",
+						exc);
+			}
+		}
 
 		this.logger.info("Reloaded successfully.");
 	}
